@@ -24,7 +24,7 @@
 
 ## 快速开始（无需安装 Python）
 
-**下载 `dist/桌面行情看板.exe` 和它同目录的 `config.json`，放在同一个文件夹里，双击 exe 即可。** 不需要装 Python、不需要 pip、不需要任何运行时——exe 已内置 Python 解释器，约 8 MB。
+**把 `桌面行情看板.exe` 和 `config.json` 放在同一个文件夹里，双击 exe 即可。** 不需要装 Python、不需要 pip、不需要任何运行时——exe 已内置 Python 解释器，约 8 MB。若 exe 单独放置、同目录没有 `config.json`，首次启动会自动生成一份默认配置，位置/尺寸记忆照样可用。
 
 - 想改标的 / 刷新间隔 / 透明度：用记事本编辑同目录的 `config.json`，重启 exe 生效。
 - 想关掉：右键窗口 → 退出，或 `Ctrl+Alt+H` 隐藏。
