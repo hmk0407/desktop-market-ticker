@@ -113,11 +113,16 @@ class MSG(ctypes.Structure):
 w.MSG = MSG
 
 WM_CREATE, WM_DESTROY, WM_PAINT, WM_TIMER, WM_CLOSE = 0x0001, 0x0002, 0x000F, 0x0113, 0x0010
+WM_SIZE, WM_NCHITTEST, WM_GETMINMAXINFO = 0x0005, 0x0084, 0x0024
 WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MOUSEMOVE, WM_RBUTTONUP = 0x0201, 0x0202, 0x0200, 0x0205
 WM_COMMAND, WM_HOTKEY, WM_APP_REFRESH = 0x0111, 0x0312, 0x8001
-WM_APP_TOGGLE_PEN, WM_APP_TOGGLE_VIS = 0x8002, 0x8003
+WM_APP_TOGGLE_PEN, WM_APP_TOGGLE_VIS, WM_APP_RESET_SIZE = 0x8002, 0x8003, 0x8004
 
-WS_POPUP, WS_VISIBLE = 0x80000000, 0x10000000
+# 命中测试返回值（用于边缘拖拽拉伸）
+HTCLIENT, HTLEFT, HTRIGHT, HTTOP, HTTOPLEFT, HTTOPRIGHT = 1, 10, 11, 12, 13, 14
+HTBOTTOM, HTBOTTOMLEFT, HTBOTTOMRIGHT = 15, 16, 17
+
+WS_POPUP, WS_VISIBLE, WS_THICKFRAME = 0x80000000, 0x10000000, 0x00040000
 WS_EX_LAYERED, WS_EX_TOPMOST, WS_EX_TOOLWINDOW, WS_EX_TRANSPARENT = 0x00080000, 0x00000008, 0x00000080, 0x00000020
 LWA_COLORKEY, LWA_ALPHA = 0x00000001, 0x00000002
 SM_CXSCREEN, SM_CYSCREEN = 0, 1
@@ -125,7 +130,7 @@ SPI_GETWORKAREA = 0x0030
 MOD_CONTROL, MOD_ALT = 0x0002, 0x0001
 VK_T, VK_H = 0x54, 0x48
 HOTKEY_PEN, HOTKEY_VIS = 1, 2
-IDM_REFRESH, IDM_PEN, IDM_HIDE, IDM_EXIT = 1001, 1002, 1003, 1004
+IDM_REFRESH, IDM_PEN, IDM_HIDE, IDM_RESET_SIZE, IDM_EXIT = 1001, 1002, 1003, 1004, 1005
 MF_STRING, MF_SEPARATOR = 0x00000000, 0x00000800
 TRANSPARENT, DEFAULT_CHARSET = 1, 1
 DT_LEFT, DT_RIGHT, DT_VCENTER, DT_SINGLELINE, DT_NOPREFIX = 0x00000000, 0x00000002, 0x00000004, 0x00000020, 0x00000800
@@ -154,6 +159,14 @@ class PAINTSTRUCT(ctypes.Structure):
         ("hdc", w.HDC), ("fErase", w.BOOL), ("rcPaint", w.RECT),
         ("fRestore", w.BOOL), ("fIncUpdate", w.BOOL),
         ("rgbReserved", ctypes.c_byte * 32),
+    ]
+
+
+class MINMAXINFO(ctypes.Structure):
+    _fields_ = [
+        ("ptReserved", w.POINT), ("ptMaxSize", w.POINT),
+        ("ptMaxPosition", w.POINT), ("ptMinTrackSize", w.POINT),
+        ("ptMaxTrackSize", w.POINT),
     ]
 
 
@@ -450,8 +463,8 @@ class Renderer:
         gdi32.SelectObject(hdc, old)
         gdi32.DeleteObject(pen)
 
-    def _sparkline(self, hdc, series, x, y, wd, ht, color):
-        if len(series) < 2:
+    def _sparkline(self, hdc, series, x, y, wd, ht, color, pen_w=2):
+        if len(series) < 2 or wd <= 4 or ht <= 6:
             return
         lo, hi = min(series), max(series)
         span = (hi - lo) or 1.0
@@ -459,7 +472,7 @@ class Renderer:
         for i, v in enumerate(series):
             pts[i].x = int(x + (wd - 2) * i / (len(series) - 1)) + 1
             pts[i].y = int(y + ht - 3 - (ht - 6) * (v - lo) / span)
-        pen = gdi32.CreatePen(0, 2, color)
+        pen = gdi32.CreatePen(0, max(1, pen_w), color)
         old = gdi32.SelectObject(hdc, pen)
         gdi32.Polyline(hdc, pts, len(series))
         gdi32.SelectObject(hdc, old)
@@ -468,6 +481,23 @@ class Renderer:
     def draw(self, hdc, state, width, height):
         rows = state["cfg"]["rows"]
         items = state["items"]
+
+        # 基准布局（config 中的默认值）→ 当前窗口尺寸的比例，实现拉伸自动缩放
+        base_w = self.cfg["width"]
+        base_rh = self.cfg["row_height"]
+        base_h = 36 + len(rows) * base_rh + 6
+        sx = width / float(base_w) if base_w else 1.0
+        sy = height / float(base_h) if base_h else 1.0
+        sf = min(sx, sy)  # 字体/圆角/线宽统一比例，避免拉伸变形
+
+        def fx(v):
+            return int(round(v * sx))
+
+        def fy(v):
+            return int(round(v * sy))
+
+        def fs(v):
+            return max(7, int(round(v * sf)))
 
         # 1) 整窗填透明键（洋红会被 SetLayeredWindowAttributes 抠掉）
         bg = gdi32.CreateSolidBrush(COLORKEY)
@@ -480,25 +510,28 @@ class Renderer:
         pen = gdi32.CreatePen(0, 1, self.c_border)
         old_brush = gdi32.SelectObject(hdc, brush)
         old_pen = gdi32.SelectObject(hdc, pen)
-        gdi32.RoundRect(hdc, 1, 1, width - 1, height - 1, 14, 14)
+        rad = max(4, int(round(14 * sf)))
+        gdi32.RoundRect(hdc, 1, 1, width - 1, height - 1, rad, rad)
         gdi32.SelectObject(hdc, old_brush)
         gdi32.SelectObject(hdc, old_pen)
         gdi32.DeleteObject(brush)
         gdi32.DeleteObject(pen)
 
         # 3) 标题栏
-        self._text(hdc, "桌面行情看板", 16, 6, 140, 26, self.c_text, self.base_size + 1, True)
+        self._text(hdc, "桌面行情看板", fx(16), fy(6), fx(140), fy(26),
+                   self.c_text, fs(self.base_size + 1), True)
         stamp = state.get("updated") or "--:--:--"
-        self._text(hdc, stamp, width - 96, 6, 80, 26, self.c_muted,
-                   self.base_size - 1, False, DT_RIGHT)
+        self._text(hdc, stamp, width - fx(96), fy(6), fx(80), fy(26),
+                   self.c_muted, fs(self.base_size - 1), False, DT_RIGHT)
 
-        rh = self.cfg["row_height"]
-        top = 36
+        rh = fy(base_rh)
+        top = fy(36)
+        spark_x = fx(196)
         for i, row in enumerate(rows):
             item = items[i] if i < len(items) else {}
             y = top + i * rh
             if i > 0:
-                self._line(hdc, 14, y, width - 14, y, self.c_grid)
+                self._line(hdc, fx(14), y, width - fx(14), y, self.c_grid)
 
             price = item.get("price") or 0.0
             chg = item.get("change") or 0.0
@@ -511,14 +544,15 @@ class Renderer:
             price_s = f"{price:,.{digit}f}" if ok else "----"
             chg_s = f"{sign}{chg:,.{digit}f}  {sign}{pct * 100:+.2f}%" if ok else "获取失败"
 
-            self._text(hdc, row["label"], 16, y + 6, 150, 20,
-                       self.c_text, self.base_size, True)
-            self._text(hdc, price_s, 16, y + 25, 160, 30,
-                       self.c_text, self.base_size + 8, True)
-            self._text(hdc, chg_s, 16, y + 47, 175, 17,
-                       color if ok else self.c_muted, self.base_size - 1)
-            self._sparkline(hdc, item.get("series") or [], 196, y + 12,
-                            width - 196 - 14, rh - 22, color)
+            self._text(hdc, row["label"], fx(16), y + fy(6), fx(150), fy(20),
+                       self.c_text, fs(self.base_size), True)
+            self._text(hdc, price_s, fx(16), y + fy(25), fx(160), fy(30),
+                       self.c_text, fs(self.base_size + 8), True)
+            self._text(hdc, chg_s, fx(16), y + fy(47), fx(175), fy(17),
+                       color if ok else self.c_muted, fs(self.base_size - 1))
+            self._sparkline(hdc, item.get("series") or [], spark_x, y + fy(12),
+                            width - spark_x - fx(14), rh - fy(22), color,
+                            pen_w=max(1, int(round(2 * sf))))
 
 
 # ---------------------------------------------------------------------------
@@ -530,9 +564,11 @@ class Widget:
         self.renderer = Renderer(cfg)
         self.hwnd = None
         self.rows = cfg["rows"]
-        self.width = cfg["width"]
+        self.base_w = cfg["width"]
         self.row_h = cfg["row_height"]
-        self.height = 36 + len(self.rows) * self.row_h + 6
+        self.base_h = 36 + len(self.rows) * self.row_h + 6
+        self.width = self.base_w
+        self.height = self.base_h
         self.penetrable = cfg["mouse_penetrable"]
         self.visible = True
         self.dragging = False
@@ -591,7 +627,7 @@ class Widget:
         x, y = self._position()
         self.hwnd = user32.CreateWindowExW(
             WS_EX_LAYERED | WS_EX_TOPMOST | WS_EX_TOOLWINDOW,
-            APP_NAME, APP_NAME, WS_POPUP,
+            APP_NAME, APP_NAME, WS_POPUP | WS_THICKFRAME,
             x, y, self.width, self.height, None, None, hinst, None)
         if not self.hwnd:
             raise ctypes.WinError(kernel32.GetLastError())
@@ -613,12 +649,20 @@ class Widget:
     def _invalidate(self):
         user32.InvalidateRect(self.hwnd, None, True)
 
+    def _reset_size(self):
+        """恢复默认尺寸并重新贴回原位置。"""
+        self.width, self.height = self.base_w, self.base_h
+        x, y = self._position()
+        user32.MoveWindow(self.hwnd, x, y, self.width, self.height, True)
+        self._invalidate()
+
     def _popup_menu(self, x, y):
         menu = user32.CreatePopupMenu()
         user32.AppendMenuW(menu, MF_STRING, IDM_REFRESH, "立即刷新")
         user32.AppendMenuW(menu, MF_STRING, IDM_PEN,
                            "取消鼠标穿透" if self.penetrable else "开启鼠标穿透")
         user32.AppendMenuW(menu, MF_STRING, IDM_HIDE, "隐藏窗口")
+        user32.AppendMenuW(menu, MF_STRING, IDM_RESET_SIZE, "重置尺寸")
         user32.AppendMenuW(menu, MF_SEPARATOR, 0, None)
         user32.AppendMenuW(menu, MF_STRING, IDM_EXIT, "退出")
         user32.TrackPopupMenu(menu, 0x0100, x, y, 0, self.hwnd, None)  # TPM_LEFTALIGN
@@ -634,6 +678,57 @@ class Widget:
                 hdc = user32.BeginPaint(hwnd, ctypes.byref(ps))
                 self.renderer.draw(hdc, self.state, self.width, self.height)
                 user32.EndPaint(hwnd, ctypes.byref(ps))
+                return 0
+
+            elif msg == WM_SIZE:
+                # lParam: 低位=宽，高位=高。拉伸时实时同步并重绘。
+                new_w = lparam & 0xFFFF
+                new_h = (lparam >> 16) & 0xFFFF
+                if new_w > 0 and new_h > 0:
+                    self.width, self.height = int(new_w), int(new_h)
+                    self._invalidate()
+                return 0
+
+            elif msg == WM_GETMINMAXINFO:
+                # 最小尺寸 = 默认尺寸，避免缩到看不清；最大不限制
+                mmi = ctypes.cast(lparam, ctypes.POINTER(MINMAXINFO)).contents
+                mmi.ptMinTrackSize.x = self.base_w
+                mmi.ptMinTrackSize.y = self.base_h
+                return 0
+
+            elif msg == WM_NCHITTEST:
+                # 边缘 8px 命中用于拉伸；其余按客户区处理（保留左键拖动逻辑）
+                if self.penetrable:
+                    return HTCLIENT
+                pt = w.POINT()
+                user32.GetCursorPos(ctypes.byref(pt))
+                rc = w.RECT()
+                user32.GetWindowRect(hwnd, ctypes.byref(rc))
+                edge = 8
+                left = abs(pt.x - rc.left) <= edge
+                right = abs(pt.x - rc.right) <= edge
+                top = abs(pt.y - rc.top) <= edge
+                bottom = abs(pt.y - rc.bottom) <= edge
+                if top and left:
+                    return HTTOPLEFT
+                if top and right:
+                    return HTTOPRIGHT
+                if bottom and left:
+                    return HTBOTTOMLEFT
+                if bottom and right:
+                    return HTBOTTOMRIGHT
+                if left:
+                    return HTLEFT
+                if right:
+                    return HTRIGHT
+                if top:
+                    return HTTOP
+                if bottom:
+                    return HTBOTTOM
+                return HTCLIENT
+
+            elif msg == WM_APP_RESET_SIZE:
+                self._reset_size()
                 return 0
 
             elif msg == WM_TIMER:
@@ -676,9 +771,13 @@ class Widget:
                 if self.dragging and not self.penetrable:
                     pt = w.POINT()
                     user32.GetCursorPos(ctypes.byref(pt))
+                    rc = w.RECT()
+                    user32.GetWindowRect(hwnd, ctypes.byref(rc))
+                    cw = rc.right - rc.left
+                    ch = rc.bottom - rc.top
                     user32.MoveWindow(hwnd, pt.x - self.drag_off[0],
                                       pt.y - self.drag_off[1],
-                                      self.width, self.height, True)
+                                      cw, ch, True)
                 return 0
 
             elif msg == WM_LBUTTONUP:
@@ -702,6 +801,8 @@ class Widget:
                     user32.PostMessageW(hwnd, WM_APP_TOGGLE_PEN, 0, 0)
                 elif cmd == IDM_HIDE:
                     user32.PostMessageW(hwnd, WM_APP_TOGGLE_VIS, 0, 0)
+                elif cmd == IDM_RESET_SIZE:
+                    user32.PostMessageW(hwnd, WM_APP_RESET_SIZE, 0, 0)
                 elif cmd == IDM_EXIT:
                     user32.PostMessageW(hwnd, WM_CLOSE, 0, 0)
                 return 0
