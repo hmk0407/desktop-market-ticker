@@ -123,6 +123,7 @@ w.MSG = MSG
 WM_CREATE, WM_DESTROY, WM_PAINT, WM_TIMER, WM_CLOSE = 0x0001, 0x0002, 0x000F, 0x0113, 0x0010
 WM_SIZE, WM_NCHITTEST, WM_GETMINMAXINFO = 0x0005, 0x0084, 0x0024
 WM_EXITSIZEMOVE = 0x0232
+WM_NCCALCSIZE, WM_NCPAINT = 0x0083, 0x0085
 WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MOUSEMOVE, WM_RBUTTONUP = 0x0201, 0x0202, 0x0200, 0x0205
 WM_COMMAND, WM_HOTKEY, WM_APP_REFRESH = 0x0111, 0x0312, 0x8001
 WM_APP_TOGGLE_PEN, WM_APP_TOGGLE_VIS, WM_APP_RESET_SIZE = 0x8002, 0x8003, 0x8004
@@ -396,11 +397,16 @@ def _set_config_value(key_name, value):
     """把单个字段写回 config.json，保留其余内容（含程序写入的 saved）。"""
     try:
         path = os.path.join(app_dir(), CONFIG_FILE)
-        with open(path, "r", encoding="utf-8") as f:
-            data = json.load(f)
+        if os.path.exists(path):
+            try:
+                with open(path, "r", encoding="utf-8") as f:
+                    data = json.load(f)
+            except Exception:
+                data = json.loads(json.dumps(DEFAULT_CONFIG))
+        else:
+            data = json.loads(json.dumps(DEFAULT_CONFIG))
         data[key_name] = value
-        with open(path, "w", encoding="utf-8") as f:
-            json.dump(data, f, ensure_ascii=False, indent=2)
+        write_config_file(data)
     except Exception:
         pass
 
@@ -854,16 +860,30 @@ class Widget:
         self.height = rc.bottom - rc.top
         try:
             path = os.path.join(app_dir(), CONFIG_FILE)
-            with open(path, "r", encoding="utf-8") as f:
-                data = json.load(f)
+            # 文件可能缺失（exe 被单独拷走）或损坏：以内存配置兜底重建
+            if os.path.exists(path):
+                try:
+                    with open(path, "r", encoding="utf-8") as f:
+                        data = json.load(f)
+                except Exception:
+                    data = json.loads(json.dumps(DEFAULT_CONFIG))
+            else:
+                data = json.loads(json.dumps(DEFAULT_CONFIG))
             data["saved"] = {
                 "width": int(self.width), "height": int(self.height),
                 "x": int(rc.left), "y": int(rc.top),
             }
-            with open(path, "w", encoding="utf-8") as f:
-                json.dump(data, f, ensure_ascii=False, indent=2)
+            if not write_config_file(data):
+                raise RuntimeError("write_config_file failed")
+        except Exception as exc:
+            self._log_error(f"save_geometry: {type(exc).__name__}: {exc}")
+
+    def _log_error(self, text):
+        try:
+            with open(os.path.join(app_dir(), "market_ticker_error.log"), "a", encoding="utf-8") as f:
+                f.write(f"{time.strftime('%Y-%m-%d %H:%M:%S')} {text}\n")
         except Exception:
-            pass  # 配置不可写时不影响运行
+            pass
 
     def _popup_menu(self, x, y):
         menu = user32.CreatePopupMenu()
@@ -891,6 +911,15 @@ class Widget:
                 hdc = user32.BeginPaint(hwnd, ctypes.byref(ps))
                 self.renderer.draw(hdc, self.state, self.width, self.height)
                 user32.EndPaint(hwnd, ctypes.byref(ps))
+                return 0
+
+            elif msg == WM_NCCALCSIZE:
+                # 客户区 = 整个窗口，去掉 WS_THICKFRAME 自带的非客户区边框
+                # （顶部那条浅色横条就是它）。返回 0 表示保留传入的窗口矩形作为客户区。
+                return 0
+
+            elif msg == WM_NCPAINT:
+                # 不绘制系统非客户区边框，避免残留描边
                 return 0
 
             elif msg == WM_SIZE:
@@ -1070,6 +1099,26 @@ class Widget:
 # ---------------------------------------------------------------------------
 # 入口
 # ---------------------------------------------------------------------------
+def write_config_file(data):
+    """原子式写回配置：先写临时文件再替换，避免中途断电损坏。"""
+    path = os.path.join(app_dir(), CONFIG_FILE)
+    tmp = path + ".tmp"
+    try:
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump(data, f, ensure_ascii=False, indent=2)
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(tmp, path)
+        return True
+    except Exception:
+        try:
+            if os.path.exists(tmp):
+                os.remove(tmp)
+        except Exception:
+            pass
+        return False
+
+
 def load_config():
     cfg = json.loads(json.dumps(DEFAULT_CONFIG))  # deep copy
     path = os.path.join(app_dir(), CONFIG_FILE)
@@ -1084,6 +1133,11 @@ def load_config():
                     cfg[k] = v
         except Exception as exc:
             print(f"[警告] 配置文件读取失败，使用默认配置：{exc}")
+    else:
+        # 关键修复：exe 单独放置时目录里没有 config.json，
+        # 若不落盘，_save_geometry 永远读不到文件 → 位置/尺寸无法记忆。
+        # 这里主动生成一份默认配置，保证后续保存一定有文件可写。
+        write_config_file(cfg)
     return cfg
 
 
