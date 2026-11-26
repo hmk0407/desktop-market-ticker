@@ -1,7 +1,9 @@
 build/
 build2/
+build3/
 dist/
 dist2/
+dist3/
 *.spec
 __pycache__/
 *.log

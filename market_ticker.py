@@ -128,8 +128,9 @@ LWA_COLORKEY, LWA_ALPHA = 0x00000001, 0x00000002
 SM_CXSCREEN, SM_CYSCREEN = 0, 1
 SPI_GETWORKAREA = 0x0030
 MOD_CONTROL, MOD_ALT = 0x0002, 0x0001
-VK_T, VK_H = 0x54, 0x48
-HOTKEY_PEN, HOTKEY_VIS = 1, 2
+VK_T, VK_H, VK_Q = 0x54, 0x48, 0x51
+HOTKEY_PEN, HOTKEY_VIS, HOTKEY_QUIT = 1, 2, 3
+ERROR_ALREADY_EXISTS = 183
 IDM_REFRESH, IDM_PEN, IDM_HIDE, IDM_RESET_SIZE, IDM_EXIT = 1001, 1002, 1003, 1004, 1005
 MF_STRING, MF_SEPARATOR = 0x00000000, 0x00000800
 TRANSPARENT, DEFAULT_CHARSET = 1, 1
@@ -189,6 +190,12 @@ user32.SetLayeredWindowAttributes.argtypes = [w.HWND, w.COLORREF, w.BYTE, w.DWOR
 user32.SetLayeredWindowAttributes.restype = w.BOOL
 user32.RegisterHotKey.argtypes = [w.HWND, ctypes.c_int, w.UINT, w.UINT]
 user32.RegisterHotKey.restype = w.BOOL
+user32.UnregisterHotKey.argtypes = [w.HWND, ctypes.c_int]
+user32.UnregisterHotKey.restype = w.BOOL
+kernel32.CreateMutexW.argtypes = [w.LPVOID, w.BOOL, w.LPCWSTR]
+kernel32.CreateMutexW.restype = w.HANDLE
+user32.SetForegroundWindow.argtypes = [w.HWND]
+user32.SetForegroundWindow.restype = w.BOOL
 user32.SetTimer.argtypes = [w.HWND, w.UINT_PTR, w.UINT, w.LPVOID]
 user32.SetTimer.restype = w.UINT_PTR
 user32.PostMessageW.argtypes = [w.HWND, w.UINT, w.WPARAM, w.LPARAM]
@@ -639,6 +646,7 @@ class Widget:
 
         user32.RegisterHotKey(self.hwnd, HOTKEY_PEN, MOD_CONTROL | MOD_ALT, VK_T)
         user32.RegisterHotKey(self.hwnd, HOTKEY_VIS, MOD_CONTROL | MOD_ALT, VK_H)
+        user32.RegisterHotKey(self.hwnd, HOTKEY_QUIT, MOD_CONTROL | MOD_ALT, VK_Q)
         user32.SetTimer(self.hwnd, 1, max(3, self.cfg["refresh_seconds"]) * 1000, None)
         self._spawn_fetch()
 
@@ -661,10 +669,10 @@ class Widget:
         user32.AppendMenuW(menu, MF_STRING, IDM_REFRESH, "立即刷新")
         user32.AppendMenuW(menu, MF_STRING, IDM_PEN,
                            "取消鼠标穿透" if self.penetrable else "开启鼠标穿透")
-        user32.AppendMenuW(menu, MF_STRING, IDM_HIDE, "隐藏窗口")
+        user32.AppendMenuW(menu, MF_STRING, IDM_HIDE, "隐藏窗口 (Ctrl+Alt+H)")
         user32.AppendMenuW(menu, MF_STRING, IDM_RESET_SIZE, "重置尺寸")
         user32.AppendMenuW(menu, MF_SEPARATOR, 0, None)
-        user32.AppendMenuW(menu, MF_STRING, IDM_EXIT, "退出")
+        user32.AppendMenuW(menu, MF_STRING, IDM_EXIT, "退出 (Ctrl+Alt+Q)")
         user32.TrackPopupMenu(menu, 0x0100, x, y, 0, self.hwnd, None)  # TPM_LEFTALIGN
         user32.DestroyMenu(menu)
 
@@ -754,6 +762,8 @@ class Widget:
                     user32.PostMessageW(hwnd, WM_APP_TOGGLE_PEN, 0, 0)
                 elif wparam == HOTKEY_VIS:
                     user32.PostMessageW(hwnd, WM_APP_TOGGLE_VIS, 0, 0)
+                elif wparam == HOTKEY_QUIT:
+                    user32.PostMessageW(hwnd, WM_CLOSE, 0, 0)
                 return 0
 
             elif msg == WM_LBUTTONDOWN:
@@ -880,6 +890,19 @@ def main():
             user32.SetProcessDPIAware()
         except Exception:
             pass
+
+    # 单实例锁：重复启动不再产生多个窗口，而是把已有窗口显示/置前
+    mutex = kernel32.CreateMutexW(None, True, "DesktopMarketTicker_SingleInstance")
+    if kernel32.GetLastError() == ERROR_ALREADY_EXISTS:
+        # 已有实例在运行：找到它的窗口并显示，然后本进程直接退出
+        user32.FindWindowW.argtypes = [w.LPCWSTR, w.LPCWSTR]
+        user32.FindWindowW.restype = w.HWND
+        existing = user32.FindWindowW(APP_NAME, APP_NAME)
+        if existing:
+            user32.ShowWindow(existing, 5)  # SW_SHOW
+            user32.SetForegroundWindow(existing)
+        return
+
     Widget(cfg).run()
 
 
