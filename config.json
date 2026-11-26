@@ -1,10 +1,34 @@
 {
   "rows": [
-    { "label": "上证指数",   "feed": "eastmoney", "secid": "1.000001",   "kline": "1.000001" },
-    { "label": "恒生指数",   "feed": "eastmoney", "secid": "100.HSI",    "kline": "100.HSI" },
-    { "label": "纳斯达克",   "feed": "eastmoney", "secid": "100.NDX",    "kline": "100.NDX" },
-    { "label": "美元/人民币", "feed": "eastmoney", "secid": "133.USDCNH", "kline": "133.USDCNH" },
-    { "label": "BTC/USDT",   "feed": "gateio",    "pair": "BTC_USDT" }
+    {
+      "label": "上证指数",
+      "feed": "eastmoney",
+      "secid": "1.000001",
+      "kline": "1.000001"
+    },
+    {
+      "label": "恒生指数",
+      "feed": "eastmoney",
+      "secid": "100.HSI",
+      "kline": "100.HSI"
+    },
+    {
+      "label": "纳斯达克",
+      "feed": "eastmoney",
+      "secid": "100.NDX",
+      "kline": "100.NDX"
+    },
+    {
+      "label": "美元/人民币",
+      "feed": "eastmoney",
+      "secid": "133.USDCNH",
+      "kline": "133.USDCNH"
+    },
+    {
+      "label": "BTC/USDT",
+      "feed": "gateio",
+      "pair": "BTC_USDT"
+    }
   ],
   "refresh_seconds": 10,
   "opacity": 220,
@@ -17,7 +41,13 @@
   "mouse_penetrable": false,
   "snap_edge": 12,
   "remember_size": true,
-  "saved": { "width": 0, "height": 0, "x": -1, "y": -1 },
+  "auto_start": false,
+  "saved": {
+    "width": 0,
+    "height": 0,
+    "x": -1,
+    "y": -1
+  },
   "colors": {
     "card": "1E222D",
     "border": "3A4152",

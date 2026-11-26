@@ -3,7 +3,7 @@
 Desktop Market Ticker - 桌面右对齐单列行情看板
 ================================================
 5 类资产（上证指数 / 恒生指数 / 纳斯达克 / 美元人民币 / BTC）竖排常驻桌面，
-无边框、半透明、置顶、可鼠标穿透，红涨绿跌，每行带迷你走势图。
+无边框、半透明、置底（不遮挡任何窗口）、可鼠标穿透，红涨绿跌，每行带迷你走势图。
 
 零第三方依赖：仅使用 Python 3 标准库 + Windows 原生 API（ctypes 调用 user32/gdi32）。
 运行：python market_ticker.py
@@ -53,6 +53,7 @@ DEFAULT_CONFIG = {
     "mouse_penetrable": False,      # True = 鼠标穿透（点不到窗口，老板键切换）
     "snap_edge": 12,               # 拖动/拉伸时吸附屏幕边缘的像素阈值
     "remember_size": True,         # 记忆拉伸后的尺寸与位置，重启恢复
+    "auto_start": False,           # 开机自启动（写入 HKCU Run 注册表，右键菜单可切换）
     "saved": {                     # 由程序自动写入，勿手动改
         "width": 0, "height": 0, "x": -1, "y": -1
     },
@@ -139,16 +140,32 @@ MOD_CONTROL, MOD_ALT = 0x0002, 0x0001
 VK_T, VK_H, VK_Q = 0x54, 0x48, 0x51
 HOTKEY_PEN, HOTKEY_VIS, HOTKEY_QUIT = 1, 2, 3
 ERROR_ALREADY_EXISTS = 183
-IDM_REFRESH, IDM_PEN, IDM_HIDE, IDM_RESET_SIZE, IDM_EXIT = 1001, 1002, 1003, 1004, 1005
+IDM_REFRESH, IDM_PEN, IDM_HIDE, IDM_RESET_SIZE, IDM_EXIT, IDM_AUTOSTART = 1001, 1002, 1003, 1004, 1005, 1006
 MF_STRING, MF_SEPARATOR = 0x00000000, 0x00000800
 TRANSPARENT, DEFAULT_CHARSET = 1, 1
 NULL_PEN = 8  # GetStockObject(NULL_PEN)
 DT_LEFT, DT_RIGHT, DT_VCENTER, DT_SINGLELINE, DT_NOPREFIX = 0x00000000, 0x00000002, 0x00000004, 0x00000020, 0x00000800
 COLORKEY = 0x00FF00FF  # 洋红作为透明键
 
+# 置底（永远在其他普通窗口之下）相关
+WS_EX_NOACTIVATE = 0x08000000     # 点击时不激活，避免被提到前台
+HWND_BOTTOM = w.HWND(1)           # SetWindowPos 的 z-order 目标：最底层
+SWP_NOSIZE, SWP_NOMOVE = 0x0001, 0x0002
+SWP_NOZORDER, SWP_NOACTIVATE = 0x0004, 0x0010
+WM_WINDOWPOSCHANGING = 0x0046
+MF_CHECKED = 0x00000008
+
+# 开机自启动（HKCU Run）相关
+HKEY_CURRENT_USER = 0x80000001
+KEY_READ, KEY_WRITE = 0x00020019, 0x00020006
+REG_SZ = 1
+ERROR_SUCCESS = 0
+RUN_KEY_PATH = r"Software\Microsoft\Windows\CurrentVersion\Run"
+
 user32 = ctypes.windll.user32
 gdi32 = ctypes.windll.gdi32
 kernel32 = ctypes.windll.kernel32
+advapi32 = ctypes.windll.advapi32
 
 LRESULT = ctypes.c_ssize_t  # 64位下 LRESULT 为有符号指针宽度
 WNDPROC = ctypes.WINFUNCTYPE(LRESULT, w.HWND, w.UINT, w.WPARAM, w.LPARAM)
@@ -177,6 +194,15 @@ class MINMAXINFO(ctypes.Structure):
         ("ptReserved", w.POINT), ("ptMaxSize", w.POINT),
         ("ptMaxPosition", w.POINT), ("ptMinTrackSize", w.POINT),
         ("ptMaxTrackSize", w.POINT),
+    ]
+
+
+class WINDOWPOS(ctypes.Structure):
+    _fields_ = [
+        ("hwnd", w.HWND), ("hwndInsertAfter", w.HWND),
+        ("x", ctypes.c_int), ("y", ctypes.c_int),
+        ("cx", ctypes.c_int), ("cy", ctypes.c_int),
+        ("flags", w.UINT),
     ]
 
 
@@ -283,8 +309,100 @@ user32.DispatchMessageW.argtypes = [ctypes.POINTER(MSG)]
 user32.DispatchMessageW.restype = w.LPARAM
 user32.SetWindowLongW.argtypes = [w.HWND, ctypes.c_int, ctypes.c_long]
 user32.SetWindowLongW.restype = ctypes.c_long
+user32.SetWindowPos.argtypes = [w.HWND, w.HWND, ctypes.c_int, ctypes.c_int,
+                                ctypes.c_int, ctypes.c_int, w.UINT]
+user32.SetWindowPos.restype = w.BOOL
+# 注册表（开机自启动）
+advapi32.RegOpenKeyExW.argtypes = [w.HANDLE, w.LPCWSTR, w.DWORD, w.DWORD,
+                                   ctypes.POINTER(w.HANDLE)]
+advapi32.RegOpenKeyExW.restype = ctypes.c_long
+advapi32.RegSetValueExW.argtypes = [w.HANDLE, w.LPCWSTR, w.DWORD, w.DWORD,
+                                    w.LPVOID, w.DWORD]
+advapi32.RegSetValueExW.restype = ctypes.c_long
+advapi32.RegDeleteValueW.argtypes = [w.HANDLE, w.LPCWSTR]
+advapi32.RegDeleteValueW.restype = ctypes.c_long
+advapi32.RegQueryValueExW.argtypes = [w.HANDLE, w.LPCWSTR, w.LPVOID,
+                                      ctypes.POINTER(w.DWORD), w.LPVOID,
+                                      ctypes.POINTER(w.DWORD)]
+advapi32.RegQueryValueExW.restype = ctypes.c_long
+advapi32.RegCloseKey.argtypes = [w.HANDLE]
+advapi32.RegCloseKey.restype = ctypes.c_long
 gdi32.CreateSolidBrush.restype = w.HBRUSH
 gdi32.CreatePen.restype = w.HPEN
+
+
+# ---------------------------------------------------------------------------
+# 开机自启动（HKCU\...\Run）
+# ---------------------------------------------------------------------------
+def autostart_command():
+    """生成写入注册表的启动命令，带引号以兼容含空格的路径。"""
+    exe = os.path.abspath(sys.executable)
+    if getattr(sys, "frozen", False):
+        return '"{}"'.format(exe)
+    return '"{}" "{}"'.format(exe, os.path.abspath(__file__))
+
+
+def _open_run_key(access):
+    key = w.HANDLE()
+    ret = advapi32.RegOpenKeyExW(w.HANDLE(HKEY_CURRENT_USER), RUN_KEY_PATH,
+                                 0, access, ctypes.byref(key))
+    if ret != ERROR_SUCCESS:
+        return None
+    return key
+
+
+def is_autostart():
+    """读取注册表中是否已为本程序设置开机自启动。"""
+    key = _open_run_key(KEY_READ)
+    if key is None:
+        return False
+    try:
+        typ = w.DWORD()
+        size = w.DWORD(0)
+        ret = advapi32.RegQueryValueExW(key, APP_NAME, None, ctypes.byref(typ),
+                                        None, ctypes.byref(size))
+        return ret == ERROR_SUCCESS
+    finally:
+        advapi32.RegCloseKey(key)
+
+
+def set_autostart(enabled):
+    """开启/关闭开机自启动；成功返回 True。"""
+    try:
+        if not enabled:
+            key = _open_run_key(KEY_WRITE)
+            if key is None:
+                return True  # 键不存在，本来就没启用
+            try:
+                advapi32.RegDeleteValueW(key, APP_NAME)  # 不存在时忽略错误
+            finally:
+                advapi32.RegCloseKey(key)
+            return True
+        key = _open_run_key(KEY_WRITE)
+        if key is None:
+            return False
+        try:
+            data = ctypes.create_unicode_buffer(autostart_command())
+            ret = advapi32.RegSetValueExW(key, APP_NAME, 0, REG_SZ, data,
+                                          ctypes.sizeof(data))
+            return ret == ERROR_SUCCESS
+        finally:
+            advapi32.RegCloseKey(key)
+    except Exception:
+        return False
+
+
+def _set_config_value(key_name, value):
+    """把单个字段写回 config.json，保留其余内容（含程序写入的 saved）。"""
+    try:
+        path = os.path.join(app_dir(), CONFIG_FILE)
+        with open(path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        data[key_name] = value
+        with open(path, "w", encoding="utf-8") as f:
+            json.dump(data, f, ensure_ascii=False, indent=2)
+    except Exception:
+        pass
 
 
 # ---------------------------------------------------------------------------
@@ -593,6 +711,13 @@ class Widget:
             if sx >= 0 and sy >= 0:
                 self.saved_pos = (sx, sy)
         self.penetrable = cfg["mouse_penetrable"]
+        # 开机自启动：config 为开关来源；开启时用当前 exe 路径刷新注册表，
+        # 关闭时确保注册表残留被清除（避免程序搬移后自启动路径失效）。
+        self.autostart = bool(cfg.get("auto_start", False))
+        if self.autostart:
+            set_autostart(True)
+        elif is_autostart():
+            set_autostart(False)
         self.visible = True
         self.dragging = False
         self.drag_off = (0, 0)
@@ -630,10 +755,19 @@ class Widget:
         flags = LWA_COLORKEY | LWA_ALPHA
         user32.SetLayeredWindowAttributes(self.hwnd, COLORKEY,
                                           int(self.cfg["opacity"]), flags)
-        ex = WS_EX_LAYERED | WS_EX_TOPMOST | WS_EX_TOOLWINDOW
+        # 置底：不要 WS_EX_TOPMOST；WS_EX_NOACTIVATE 避免点击时被提到前台
+        ex = WS_EX_LAYERED | WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE
         if self.penetrable:
             ex |= WS_EX_TRANSPARENT
         user32.SetWindowLongW(self.hwnd, -20, ex)  # GWL_EXSTYLE
+        self._send_to_bottom()
+
+    def _send_to_bottom(self):
+        """把窗口压到所有普通窗口之下，保证不遮挡任何窗口。"""
+        if not self.hwnd:
+            return
+        user32.SetWindowPos(self.hwnd, HWND_BOTTOM, 0, 0, 0, 0,
+                            SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE)
 
     def create(self):
         hinst = kernel32.GetModuleHandleW(None)
@@ -651,7 +785,7 @@ class Widget:
 
         x, y = self._position()
         self.hwnd = user32.CreateWindowExW(
-            WS_EX_LAYERED | WS_EX_TOPMOST | WS_EX_TOOLWINDOW,
+            WS_EX_LAYERED | WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE,
             APP_NAME, APP_NAME, WS_POPUP | WS_THICKFRAME,
             x, y, self.width, self.height, None, None, hinst, None)
         if not self.hwnd:
@@ -660,6 +794,7 @@ class Widget:
         self.state["hwnd"] = int(self.hwnd)
         self._apply_layered()
         user32.ShowWindow(self.hwnd, 5)  # SW_SHOW
+        self._send_to_bottom()           # 显示后立刻压到底层
         user32.UpdateWindow(self.hwnd)
 
         user32.RegisterHotKey(self.hwnd, HOTKEY_PEN, MOD_CONTROL | MOD_ALT, VK_T)
@@ -737,6 +872,10 @@ class Widget:
                            "取消鼠标穿透" if self.penetrable else "开启鼠标穿透")
         user32.AppendMenuW(menu, MF_STRING, IDM_HIDE, "隐藏窗口 (Ctrl+Alt+H)")
         user32.AppendMenuW(menu, MF_STRING, IDM_RESET_SIZE, "重置尺寸")
+        auto_flag = MF_STRING | (MF_CHECKED if self.autostart else 0)
+        user32.AppendMenuW(menu, auto_flag, IDM_AUTOSTART,
+                           "开机自启动（已开启，点击关闭）" if self.autostart
+                           else "开机自启动（点击开启）")
         user32.AppendMenuW(menu, MF_SEPARATOR, 0, None)
         user32.AppendMenuW(menu, MF_STRING, IDM_EXIT, "退出 (Ctrl+Alt+Q)")
         user32.TrackPopupMenu(menu, 0x0100, x, y, 0, self.hwnd, None)  # TPM_LEFTALIGN
@@ -768,6 +907,13 @@ class Widget:
                 mmi = ctypes.cast(lparam, ctypes.POINTER(MINMAXINFO)).contents
                 mmi.ptMinTrackSize.x = self.base_w
                 mmi.ptMinTrackSize.y = self.base_h
+                return 0
+
+            elif msg == WM_WINDOWPOSCHANGING:
+                # 系统/其他程序试图把窗口提到前面时，强制压回底层
+                wp = ctypes.cast(lparam, ctypes.POINTER(WINDOWPOS)).contents
+                if not (wp.flags & SWP_NOZORDER):
+                    wp.hwndInsertAfter = HWND_BOTTOM
                 return 0
 
             elif msg == WM_NCHITTEST:
@@ -866,6 +1012,8 @@ class Widget:
                 if self.dragging:
                     self.dragging = False
                     user32.ReleaseCapture()
+                    self._snap_to_edges()
+                    self._save_geometry()  # 自定义拖动不会触发 WM_EXITSIZEMOVE
                 return 0
 
             elif msg == WM_RBUTTONUP:
@@ -885,14 +1033,20 @@ class Widget:
                     user32.PostMessageW(hwnd, WM_APP_TOGGLE_VIS, 0, 0)
                 elif cmd == IDM_RESET_SIZE:
                     user32.PostMessageW(hwnd, WM_APP_RESET_SIZE, 0, 0)
+                elif cmd == IDM_AUTOSTART:
+                    self.autostart = not self.autostart
+                    set_autostart(self.autostart)
+                    _set_config_value("auto_start", self.autostart)
                 elif cmd == IDM_EXIT:
                     user32.PostMessageW(hwnd, WM_CLOSE, 0, 0)
                 return 0
 
             elif msg in (WM_CLOSE, WM_DESTROY):
                 if msg == WM_CLOSE:
+                    self._save_geometry()  # 退出前记下当前位置与尺寸
                     user32.DestroyWindow(hwnd)
                 else:
+                    self._save_geometry()  # 兜底：异常销毁时也保存
                     user32.PostQuitMessage(0)
                 return 0
 
@@ -971,8 +1125,9 @@ def main():
         user32.FindWindowW.restype = w.HWND
         existing = user32.FindWindowW(APP_NAME, APP_NAME)
         if existing:
-            user32.ShowWindow(existing, 5)  # SW_SHOW
-            user32.SetForegroundWindow(existing)
+            user32.ShowWindow(existing, 5)  # SW_SHOW（保持置底，不抢前台）
+            user32.SetWindowPos(existing, HWND_BOTTOM, 0, 0, 0, 0,
+                                SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE)
         return
 
     Widget(cfg).run()
