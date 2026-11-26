@@ -25,6 +25,13 @@ import urllib.request
 APP_NAME = "DesktopMarketTicker"
 CONFIG_FILE = "config.json"
 
+
+def app_dir():
+    """ exe 打包后用 sys.executable 所在目录；源码运行用脚本所在目录。 """
+    if getattr(sys, "frozen", False):
+        return os.path.dirname(os.path.abspath(sys.executable))
+    return os.path.dirname(os.path.abspath(__file__))
+
 DEFAULT_CONFIG = {
     "rows": [
         {"label": "上证指数",   "feed": "eastmoney", "secid": "1.000001",   "kline": "1.000001"},
@@ -709,7 +716,7 @@ class Widget:
         except Exception as exc:
             # 绝不让异常跨过 ctypes 回调边界
             try:
-                with open("market_ticker_error.log", "a", encoding="utf-8") as f:
+                with open(os.path.join(app_dir(), "market_ticker_error.log"), "a", encoding="utf-8") as f:
                     f.write(f"{time.strftime('%Y-%m-%d %H:%M:%S')} msg={msg} {type(exc).__name__}: {exc}\n")
             except Exception:
                 pass
@@ -728,7 +735,7 @@ class Widget:
 # ---------------------------------------------------------------------------
 def load_config():
     cfg = json.loads(json.dumps(DEFAULT_CONFIG))  # deep copy
-    path = os.path.join(os.path.dirname(os.path.abspath(__file__)), CONFIG_FILE)
+    path = os.path.join(app_dir(), CONFIG_FILE)
     if os.path.exists(path):
         try:
             with open(path, "r", encoding="utf-8") as f:

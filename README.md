@@ -15,18 +15,24 @@
 - **右键菜单**：立即刷新、切换鼠标穿透、隐藏、退出。
 - **可拖动**：左键拖动窗口到任意位置（仍保持置顶）。
 
-## 依赖与环境
+## 快速开始（无需安装 Python）
+
+**下载 `dist/桌面行情看板.exe` 和它同目录的 `config.json`，放在同一个文件夹里，双击 exe 即可。** 不需要装 Python、不需要 pip、不需要任何运行时——exe 已内置 Python 解释器，约 8 MB。
+
+- 想改标的 / 刷新间隔 / 透明度：用记事本编辑同目录的 `config.json`，重启 exe 生效。
+- 想关掉：右键窗口 → 退出，或 `Ctrl+Alt+H` 隐藏。
+- 若被杀毒软件误报（PyInstaller 打包的程序偶发误报），添加信任即可；源码可自行审阅后重新打包。
+
+## 依赖与环境（仅源码运行 / 自行打包时需要）
 
 | 项目 | 要求 |
 |---|---|
 | 操作系统 | Windows 7 及以上（推荐 Win10/11） |
 | Python | **3.8+**，任意官方或便携版（本仓库在 3.13 验证） |
-| 第三方库 | **无**。无需 pip install，无需 pyinstaller，无需 Visual Studio |
+| 第三方库 | **无**。运行源码无需 pip install |
 | 字体 | 使用系统自带的「Microsoft YaHei（微软雅黑）」，Win7+ 均有 |
 
-> 如果你希望双击 `.py` 就能运行又不想装 Python，可以用 `pyinstaller` 自行打包成 exe（可选，非必需）；打包不是运行的前提。
-
-## 运行
+## 运行源码
 
 ```powershell
 python market_ticker.py
@@ -37,6 +43,15 @@ python market_ticker.py
 ```powershell
 python market_ticker.py --test
 ```
+
+## 自行打包 exe（可选）
+
+```powershell
+python -m pip install pyinstaller
+python -m PyInstaller --onefile --noconsole --clean --name "桌面行情看板" market_ticker.py
+```
+
+把生成的 `dist/桌面行情看板.exe` 和 `config.json` 放同一目录即可分发。程序会自动识别 exe 模式，从 exe 所在目录读取 `config.json` 与写错误日志。
 
 ## 配置
 
@@ -82,7 +97,8 @@ python market_ticker.py --test
 ## 文件说明
 
 - `market_ticker.py` — 全部逻辑（数据 / 绘制 / 窗口），单文件即可运行
-- `config.json` — 可编辑配置
+- `config.json` — 可编辑配置（exe 与源码通用）
+- `dist/桌面行情看板.exe` — 免 Python 的单文件可执行程序（约 8 MB）
 - `README.md` — 本说明
 
 ## 推送到 GitHub
