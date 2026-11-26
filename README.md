@@ -85,6 +85,22 @@ python market_ticker.py --test
 - `config.json` — 可编辑配置
 - `README.md` — 本说明
 
+## 推送到 GitHub
+
+本地已初始化 Git 仓库并完成首次提交。要同步到自己的 GitHub：
+
+1. 在 https://github.com/settings/tokens 生成一个 Personal Access Token（勾选 `repo` 权限）；
+2. 双击 `push_to_github.bat`，按提示粘贴 token，脚本会自动创建远程仓库并推送；
+3. 推送成功后按脚本提示清除 remote 中明文保存的 token。
+
+也可手动执行：
+
+```powershell
+git remote add origin https://github.com/<你的用户名>/desktop-market-ticker.git
+git branch -M main
+git push -u origin main
+```
+
 ## 许可
 
 MIT
