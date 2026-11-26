@@ -24,6 +24,8 @@ import urllib.request
 # ---------------------------------------------------------------------------
 APP_NAME = "DesktopMarketTicker"
 CONFIG_FILE = "config.json"
+HEADER_H = 10   # 顶部留白（标题栏已去掉）
+FOOTER_H = 10   # 底部留白
 
 
 def app_dir():
@@ -45,10 +47,15 @@ DEFAULT_CONFIG = {
     "margin_right": 16,
     "position": "right-center",     # right-top / right-center / right-bottom
     "width": 330,
-    "row_height": 66,
+    "row_height": 78,
     "font": "Microsoft YaHei",      # Win10/11 自带；也可换成 SimHei
-    "font_size": 10,
+    "font_size": 13,
     "mouse_penetrable": False,      # True = 鼠标穿透（点不到窗口，老板键切换）
+    "snap_edge": 12,               # 拖动/拉伸时吸附屏幕边缘的像素阈值
+    "remember_size": True,         # 记忆拉伸后的尺寸与位置，重启恢复
+    "saved": {                     # 由程序自动写入，勿手动改
+        "width": 0, "height": 0, "x": -1, "y": -1
+    },
     "colors": {
         "card": "1E222D",           # 卡片底色
         "border": "3A4152",
@@ -114,6 +121,7 @@ w.MSG = MSG
 
 WM_CREATE, WM_DESTROY, WM_PAINT, WM_TIMER, WM_CLOSE = 0x0001, 0x0002, 0x000F, 0x0113, 0x0010
 WM_SIZE, WM_NCHITTEST, WM_GETMINMAXINFO = 0x0005, 0x0084, 0x0024
+WM_EXITSIZEMOVE = 0x0232
 WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MOUSEMOVE, WM_RBUTTONUP = 0x0201, 0x0202, 0x0200, 0x0205
 WM_COMMAND, WM_HOTKEY, WM_APP_REFRESH = 0x0111, 0x0312, 0x8001
 WM_APP_TOGGLE_PEN, WM_APP_TOGGLE_VIS, WM_APP_RESET_SIZE = 0x8002, 0x8003, 0x8004
@@ -134,6 +142,7 @@ ERROR_ALREADY_EXISTS = 183
 IDM_REFRESH, IDM_PEN, IDM_HIDE, IDM_RESET_SIZE, IDM_EXIT = 1001, 1002, 1003, 1004, 1005
 MF_STRING, MF_SEPARATOR = 0x00000000, 0x00000800
 TRANSPARENT, DEFAULT_CHARSET = 1, 1
+NULL_PEN = 8  # GetStockObject(NULL_PEN)
 DT_LEFT, DT_RIGHT, DT_VCENTER, DT_SINGLELINE, DT_NOPREFIX = 0x00000000, 0x00000002, 0x00000004, 0x00000020, 0x00000800
 COLORKEY = 0x00FF00FF  # 洋红作为透明键
 
@@ -216,6 +225,8 @@ gdi32.CreateSolidBrush.argtypes = [w.COLORREF]
 gdi32.CreateSolidBrush.restype = w.HBRUSH
 gdi32.CreatePen.argtypes = [ctypes.c_int, ctypes.c_int, w.COLORREF]
 gdi32.CreatePen.restype = w.HPEN
+gdi32.GetStockObject.argtypes = [ctypes.c_int]
+gdi32.GetStockObject.restype = w.HGDIOBJ
 gdi32.SetTextColor.argtypes = [w.HDC, w.COLORREF]
 gdi32.SetTextColor.restype = w.COLORREF
 user32.DrawTextW.argtypes = [w.HDC, w.LPCWSTR, ctypes.c_int, ctypes.POINTER(w.RECT), w.UINT]
@@ -492,7 +503,7 @@ class Renderer:
         # 基准布局（config 中的默认值）→ 当前窗口尺寸的比例，实现拉伸自动缩放
         base_w = self.cfg["width"]
         base_rh = self.cfg["row_height"]
-        base_h = 36 + len(rows) * base_rh + 6
+        base_h = HEADER_H + len(rows) * base_rh + FOOTER_H
         sx = width / float(base_w) if base_w else 1.0
         sy = height / float(base_h) if base_h else 1.0
         sf = min(sx, sy)  # 字体/圆角/线宽统一比例，避免拉伸变形
@@ -512,27 +523,20 @@ class Renderer:
         user32.FillRect(hdc, ctypes.byref(rc), bg)
         gdi32.DeleteObject(bg)
 
-        # 2) 圆角卡片 + 边框
+        # 2) 圆角卡片背景（无边框线）：用空画笔让 RoundRect 只填充不描边
         brush = gdi32.CreateSolidBrush(self.c_card)
-        pen = gdi32.CreatePen(0, 1, self.c_border)
+        null_pen = gdi32.GetStockObject(NULL_PEN)
         old_brush = gdi32.SelectObject(hdc, brush)
-        old_pen = gdi32.SelectObject(hdc, pen)
+        old_pen = gdi32.SelectObject(hdc, null_pen)
         rad = max(4, int(round(14 * sf)))
         gdi32.RoundRect(hdc, 1, 1, width - 1, height - 1, rad, rad)
         gdi32.SelectObject(hdc, old_brush)
         gdi32.SelectObject(hdc, old_pen)
         gdi32.DeleteObject(brush)
-        gdi32.DeleteObject(pen)
 
-        # 3) 标题栏
-        self._text(hdc, "桌面行情看板", fx(16), fy(6), fx(140), fy(26),
-                   self.c_text, fs(self.base_size + 1), True)
-        stamp = state.get("updated") or "--:--:--"
-        self._text(hdc, stamp, width - fx(96), fy(6), fx(80), fy(26),
-                   self.c_muted, fs(self.base_size - 1), False, DT_RIGHT)
-
+        # 3) 数据行（无标题栏）
         rh = fy(base_rh)
-        top = fy(36)
+        top = fy(HEADER_H)
         spark_x = fx(196)
         for i, row in enumerate(rows):
             item = items[i] if i < len(items) else {}
@@ -551,14 +555,15 @@ class Renderer:
             price_s = f"{price:,.{digit}f}" if ok else "----"
             chg_s = f"{sign}{chg:,.{digit}f}  {sign}{pct * 100:+.2f}%" if ok else "获取失败"
 
-            self._text(hdc, row["label"], fx(16), y + fy(6), fx(150), fy(20),
+            # 行内：名称 / 大号现价 / 涨跌，垂直方向在行高内均匀铺开
+            self._text(hdc, row["label"], fx(16), y + fy(4), fx(150), fy(22),
                        self.c_text, fs(self.base_size), True)
-            self._text(hdc, price_s, fx(16), y + fy(25), fx(160), fy(30),
-                       self.c_text, fs(self.base_size + 8), True)
-            self._text(hdc, chg_s, fx(16), y + fy(47), fx(175), fy(17),
-                       color if ok else self.c_muted, fs(self.base_size - 1))
-            self._sparkline(hdc, item.get("series") or [], spark_x, y + fy(12),
-                            width - spark_x - fx(14), rh - fy(22), color,
+            self._text(hdc, price_s, fx(16), y + fy(26), fx(170), fy(34),
+                       self.c_text, fs(self.base_size + 9), True)
+            self._text(hdc, chg_s, fx(16), y + fy(62), fx(180), fy(18),
+                       color if ok else self.c_muted, fs(self.base_size))
+            self._sparkline(hdc, item.get("series") or [], spark_x, y + fy(10),
+                            width - spark_x - fx(14), rh - fy(20), color,
                             pen_w=max(1, int(round(2 * sf))))
 
 
@@ -573,9 +578,20 @@ class Widget:
         self.rows = cfg["rows"]
         self.base_w = cfg["width"]
         self.row_h = cfg["row_height"]
-        self.base_h = 36 + len(self.rows) * self.row_h + 6
+        self.base_h = HEADER_H + len(self.rows) * self.row_h + FOOTER_H
         self.width = self.base_w
         self.height = self.base_h
+        # 恢复上次保存的尺寸与位置
+        self.saved_pos = None
+        saved = cfg.get("saved") or {}
+        if cfg.get("remember_size", True):
+            sw = int(saved.get("width") or 0)
+            sh = int(saved.get("height") or 0)
+            sx, sy = int(saved.get("x", -1)), int(saved.get("y", -1))
+            if sw >= self.base_w and sh >= self.base_h:
+                self.width, self.height = sw, sh
+            if sx >= 0 and sy >= 0:
+                self.saved_pos = (sx, sy)
         self.penetrable = cfg["mouse_penetrable"]
         self.visible = True
         self.dragging = False
@@ -598,6 +614,8 @@ class Widget:
 
     def _position(self):
         rc = self._screen_workarea()
+        if self.saved_pos:
+            return self.saved_pos
         x = rc.right - self.width - self.cfg["margin_right"]
         pos = self.cfg["position"]
         if pos == "right-top":
@@ -658,11 +676,59 @@ class Widget:
         user32.InvalidateRect(self.hwnd, None, True)
 
     def _reset_size(self):
-        """恢复默认尺寸并重新贴回原位置。"""
+        """恢复默认尺寸并重新贴回原位置，清除已保存的几何。"""
         self.width, self.height = self.base_w, self.base_h
-        x, y = self._position()
+        self.saved_pos = None
+        rc = self._screen_workarea()
+        x = rc.right - self.width - self.cfg["margin_right"]
+        y = rc.top + (rc.bottom - rc.top - self.height) // 2
         user32.MoveWindow(self.hwnd, x, y, self.width, self.height, True)
-        self._invalidate()
+        self._save_geometry()
+
+    def _snap_to_edges(self):
+        """拖动/拉伸结束后，若靠近屏幕边缘则吸附贴合。"""
+        thr = int(self.cfg.get("snap_edge", 12))
+        if thr <= 0:
+            return
+        wa = self._screen_workarea()
+        rc = w.RECT()
+        if not user32.GetWindowRect(self.hwnd, ctypes.byref(rc)):
+            return
+        x, y, cw, ch = rc.left, rc.top, rc.right - rc.left, rc.bottom - rc.top
+        # 左右吸附
+        if abs(x - wa.left) <= thr:
+            x = wa.left
+        elif abs(rc.right - wa.right) <= thr:
+            x = wa.right - cw
+        # 上下吸附
+        if abs(y - wa.top) <= thr:
+            y = wa.top
+        elif abs(rc.bottom - wa.bottom) <= thr:
+            y = wa.bottom - ch
+        if x != rc.left or y != rc.top:
+            user32.MoveWindow(self.hwnd, x, y, cw, ch, True)
+
+    def _save_geometry(self):
+        """把当前窗口尺寸/位置写回 config.json，供下次启动恢复。"""
+        if not self.cfg.get("remember_size", True):
+            return
+        rc = w.RECT()
+        if not user32.GetWindowRect(self.hwnd, ctypes.byref(rc)):
+            return
+        self.width = rc.right - rc.left
+        self.height = rc.bottom - rc.top
+        try:
+            path = os.path.join(app_dir(), CONFIG_FILE)
+            with open(path, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            data["saved"] = {
+                "width": int(self.width), "height": int(self.height),
+                "x": int(rc.left), "y": int(rc.top),
+            }
+            with open(path, "w", encoding="utf-8") as f:
+                json.dump(data, f, ensure_ascii=False, indent=2)
+        except Exception:
+            pass  # 配置不可写时不影响运行
 
     def _popup_menu(self, x, y):
         menu = user32.CreatePopupMenu()
@@ -734,6 +800,12 @@ class Widget:
                 if bottom:
                     return HTBOTTOM
                 return HTCLIENT
+
+            elif msg == WM_EXITSIZEMOVE:
+                # 拖动/拉伸结束：边缘吸附 + 记住几何
+                self._snap_to_edges()
+                self._save_geometry()
+                return 0
 
             elif msg == WM_APP_RESET_SIZE:
                 self._reset_size()
